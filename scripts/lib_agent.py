@@ -513,6 +513,11 @@ def run_openclaw_prompt(
             for i in range(0, total_chunks - 1)
         ]
     for chunk in chunks:
+        elapsed = time.time() - start_time
+        remaining = timeout_seconds - elapsed
+        if remaining <= 0:
+            timed_out = True
+            break
         try:
             result = subprocess.run(
                 [
@@ -528,21 +533,21 @@ def run_openclaw_prompt(
                 capture_output=True,
                 text=True,
                 cwd=str(workspace),
-                timeout=timeout_seconds,
+                timeout=remaining,
                 check=False,
             )
-            stdout = result.stdout
-            stderr = result.stderr
+            stdout += result.stdout
+            stderr += result.stderr
             exit_code = result.returncode
             if result.returncode not in (0, -1) and not timed_out:
                 break
         except subprocess.TimeoutExpired as exc:
             timed_out = True
-            stdout = exc.stdout or ""
-            stderr = exc.stderr or ""
+            stdout += exc.stdout or ""
+            stderr += exc.stderr or ""
             break
         except FileNotFoundError as exc:
-            stderr = f"openclaw command not found: {exc}"
+            stderr += f"openclaw command not found: {exc}"
             break
 
     transcript = _load_transcript(agent_id, session_id, start_time)
