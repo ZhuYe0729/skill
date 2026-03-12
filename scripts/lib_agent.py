@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import subprocess
 import time
 from pathlib import Path
@@ -15,7 +16,7 @@ from lib_tasks import Task
 
 
 logger = logging.getLogger(__name__)
-MAX_OPENCLAW_MESSAGE_CHARS = 4000
+MAX_OPENCLAW_MESSAGE_CHARS = int(os.environ.get("PINCHBENCH_MAX_MSG_CHARS", "4000"))
 
 
 def slugify_model(model_id: str) -> str:
@@ -97,7 +98,10 @@ def ensure_agent_exists(agent_id: str, model_id: str, workspace_dir: Path) -> bo
         if agent_id in existing_agents or normalized_id in existing_agents:
             # Agent exists — check if workspace matches
             current_workspace = _get_agent_workspace(agent_id)
-            if current_workspace is not None and current_workspace.resolve() == workspace_dir.resolve():
+            if (
+                current_workspace is not None
+                and current_workspace.resolve() == workspace_dir.resolve()
+            ):
                 logger.info("Agent %s already exists with correct workspace", agent_id)
                 return False
             # Workspace is stale or unknown — delete and recreate
@@ -173,6 +177,8 @@ def prepare_task_workspace(skill_dir: Path, run_id: str, task: Task, agent_id: s
     Prepare workspace for a task by copying fixtures.
     Uses the agent's configured workspace to ensure files are in the right place.
     """
+    import shutil
+
     # Get agent's workspace from agent config
     workspace = _get_agent_workspace(agent_id)
     if workspace is None:
@@ -180,6 +186,10 @@ def prepare_task_workspace(skill_dir: Path, run_id: str, task: Task, agent_id: s
         logger.warning("Could not find agent workspace, using fallback")
         workspace = Path(f"/tmp/pinchbench/{run_id}/{task.task_id}")
 
+    # Clear workspace before each task to prevent stale files from prior tasks
+    # from contaminating the agent's context.
+    if workspace.exists():
+        shutil.rmtree(workspace)
     workspace.mkdir(parents=True, exist_ok=True)
 
     for file_spec in task.workspace_files:
@@ -391,7 +401,9 @@ def execute_openclaw_task(
     logger.info("   Task: %s", task.name)
     logger.info("   Category: %s", task.category)
     if verbose:
-        logger.info("   Prompt: %s", task.prompt[:500] + "..." if len(task.prompt) > 500 else task.prompt)
+        logger.info(
+            "   Prompt: %s", task.prompt[:500] + "..." if len(task.prompt) > 500 else task.prompt
+        )
 
     # Clean up previous session transcripts so we can reliably find this task's
     # transcript (OpenClaw uses its own UUID-based naming, not our session ID).
@@ -458,7 +470,7 @@ def execute_openclaw_task(
         if stderr:
             logger.info("   [VERBOSE] Stderr:\n%s", stderr[:1000])
         logger.info("   [VERBOSE] Transcript entries: %d", len(transcript))
-        
+
         # Show agent responses from transcript
         for entry in transcript:
             if entry.get("type") == "message":
@@ -472,7 +484,7 @@ def execute_openclaw_task(
                 elif role == "user":
                     preview = content[:200] + "..." if len(content) > 200 else content
                     logger.info("   [VERBOSE] User message: %s", preview)
-        
+
         # Show workspace files after task
         if workspace.exists():
             logger.info("   [VERBOSE] Workspace files after task:")

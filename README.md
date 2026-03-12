@@ -5,6 +5,8 @@
 [![Leaderboard](https://img.shields.io/badge/leaderboard-pinchbench.com-blue)](https://pinchbench.com)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
+> **Note:** This repository contains the benchmark skill/tasks. It is NOT the source of official leaderboard results. To add models to the official results, modify [pinchbench/scripts/default-models.yml](https://github.com/pinchbench/scripts/blob/main/default-models.yml).
+
 PinchBench measures how well LLM models perform as the brain of an [OpenClaw](https://github.com/openclaw/openclaw) agent. Instead of synthetic tests, we throw real tasks at agents: scheduling meetings, writing code, triaging email, researching topics, and managing files.
 
 Results are collected on a public leaderboard at **[pinchbench.com](https://pinchbench.com)**.
@@ -73,6 +75,19 @@ To get your results on the leaderboard:
 
 Skip uploading with `--no-upload` if you just want local results.
 
+### Official Results
+
+To submit an official run (marked on the leaderboard):
+
+```bash
+# Using environment variable
+export PINCHBENCH_OFFICIAL_KEY=your_official_key
+./scripts/run.sh --model anthropic/claude-sonnet-4
+
+# Using command line flag
+./scripts/run.sh --model anthropic/claude-sonnet-4 --official-key your_official_key
+```
+
 ## Command Reference
 
 | Flag                     | Description                                                                   |
@@ -86,6 +101,7 @@ Skip uploading with `--no-upload` if you just want local results.
 | `--no-upload`            | Skip uploading to leaderboard                                                 |
 | `--register`             | Request an API token for submissions                                          |
 | `--upload FILE`          | Upload a previous results JSON                                                |
+| `--official-key KEY`     | Mark submission as official (or use `PINCHBENCH_OFFICIAL_KEY` env var)         |
 
 ## Contributing Tasks
 
