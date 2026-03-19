@@ -234,7 +234,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--no-fail-fast",
         action="store_true",
-        help="Continue running all tasks even if sanity check scores 0%",
+        help="Continue running all tasks even if sanity check scores 0%%",
     )
     return parser.parse_args()
 
