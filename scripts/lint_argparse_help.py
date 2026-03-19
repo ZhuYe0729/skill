@@ -12,7 +12,7 @@ import re
 from pathlib import Path
 
 
-UNESCAPED_PERCENT = re.compile(r"(?<!%)%(?!%)")
+UNESCAPED_PERCENT = re.compile(r"(?<!%)%(?!(%|\())")  # skip %% and %(name)s
 SKIP_DIRS = {".git", ".venv", "venv", "build", "dist", "__pycache__"}
 
 
