@@ -91,8 +91,8 @@ def grade(transcript: list, workspace_path: str) -> dict:
     else:
         scores["description_present"] = 0.0
 
-    # Check for time (15:00 or 3pm)
-    if re.search(r'DTSTART.*T15\d{4}', ics_content) or re.search(r'DTSTART.*T030000', ics_content):
+    # Check for time (3:00 PM = 15:00, allow any seconds value)
+    if re.search(r'DTSTART.*T1500\d{2}', ics_content):
         scores["time_correct"] = 1.0
     else:
         scores["time_correct"] = 0.0
