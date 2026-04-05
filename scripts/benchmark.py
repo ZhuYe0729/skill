@@ -23,15 +23,9 @@ import time
 from pathlib import Path
 from typing import Dict, List, Optional, Any
 
-from lib_agent import (
-    cleanup_agent_sessions,
-    ensure_agent_exists,
-    execute_openclaw_task,
-    ModelValidationError,
-    slugify_model,
-    validate_openrouter_model,
-)
+from lib_agent import ModelValidationError, slugify_model
 from lib_grading import GradeResult, grade_task
+from lib_runtime import RuntimeOptions, create_runtime
 from lib_tasks import Task, TaskLoader
 
 
@@ -170,7 +164,7 @@ class BenchmarkRunner:
 
 
 def _parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="PinchBench OpenClaw Benchmark Runner")
+    parser = argparse.ArgumentParser(description="PinchBench benchmark runner")
     parser.add_argument(
         "--model",
         required=False,
@@ -180,6 +174,12 @@ def _parse_args() -> argparse.Namespace:
         "--suite",
         default="all",
         help='Tasks to run: "all", "automated-only", or comma-separated IDs',
+    )
+    parser.add_argument(
+        "--runtime",
+        choices=["openclaw", "nanobot"],
+        default="openclaw",
+        help="Agent runtime to benchmark (default: openclaw)",
     )
     parser.add_argument(
         "--output-dir",
@@ -218,6 +218,18 @@ def _parse_args() -> argparse.Namespace:
         "--judge",
         default=None,
         help="Judge model identifier (default: openrouter/anthropic/claude-opus-4.5)",
+    )
+    parser.add_argument(
+        "--nanobot-config",
+        type=str,
+        default=None,
+        help="Path to nanobot config.json when using --runtime nanobot",
+    )
+    parser.add_argument(
+        "--nanobot-path",
+        type=str,
+        default=None,
+        help="Path to a nanobot repository or installation root when using --runtime nanobot",
     )
     parser.add_argument(
         "--verbose",
@@ -515,9 +527,9 @@ def main():
         sys.exit(2)
 
     if args.register:
-        try:
-            from lib_upload import UploadError, register_token, save_token_config
+        from lib_upload import UploadError, register_token, save_token_config
 
+        try:
             token, claim_url = register_token()
             config_path = save_token_config(token, claim_url)
             logger.info("Saved token to %s", config_path)
@@ -529,13 +541,13 @@ def main():
             sys.exit(1)
 
     if args.upload:
+        from lib_upload import UploadError, upload_results
+
         results_path = Path(args.upload)
         if not results_path.exists():
             logger.error("Results file not found: %s", results_path)
             sys.exit(1)
         try:
-            from lib_upload import UploadError, upload_results
-
             result = upload_results(results_path)
             if result.rank is not None:
                 logger.info("Uploaded to leaderboard: rank #%s", result.rank)
@@ -553,23 +565,28 @@ def main():
     logger.info("📂 Loading tasks from directory...")
     runner.load_tasks()
 
-    model_slug = slugify_model(args.model)
     run_root = Path("/tmp/pinchbench")
     run_id = _next_run_id(run_root)
     skill_dir = skill_root
-    agent_id = f"bench-{model_slug}"
-    # Use a shared workspace for the agent - we'll copy fixtures per task
-    agent_workspace = Path(f"/tmp/pinchbench/{run_id}/agent_workspace")
+    model_slug = slugify_model(args.model)
+    runtime_options = RuntimeOptions(
+        kind=args.runtime,
+        model_id=args.model,
+        skill_dir=skill_dir,
+        run_id=run_id,
+        timeout_multiplier=args.timeout_multiplier,
+        verbose=args.verbose,
+        nanobot_config=Path(args.nanobot_config).expanduser().resolve() if args.nanobot_config else None,
+        nanobot_path=Path(args.nanobot_path).expanduser().resolve() if args.nanobot_path else None,
+    )
+    runtime = create_runtime(runtime_options)
 
-    # Validate model exists before wasting time on tasks
     try:
-        validate_openrouter_model(args.model)
-    except ModelValidationError as exc:
+        runtime.validate_model()
+        runtime.prepare()
+    except (ModelValidationError, RuntimeError, ValueError) as exc:
         logger.error("❌ %s", exc)
         sys.exit(1)
-
-    ensure_agent_exists(agent_id, args.model, agent_workspace)
-    cleanup_agent_sessions(agent_id)
 
     task_ids = _select_task_ids(runner.tasks, args.suite)
     results = []
@@ -597,20 +614,12 @@ def main():
             logger.info("%s", "=" * 80)
             execution_error = None
             try:
-                result = execute_openclaw_task(
-                    task=task,
-                    agent_id=agent_id,
-                    model_id=args.model,
-                    run_id=f"{run_id}-{run_index + 1}",
-                    timeout_multiplier=args.timeout_multiplier,
-                    skill_dir=skill_dir,
-                    verbose=args.verbose,
-                )
+                result = runtime.execute_task(task)
             except Exception as exc:
                 execution_error = str(exc)
                 logger.warning("Task execution failed for %s, continuing: %s", task.task_id, exc)
                 result = {
-                    "agent_id": agent_id,
+                    "agent_id": runtime.agent_id,
                     "task_id": task.task_id,
                     "status": "error",
                     "transcript": [],
@@ -621,10 +630,15 @@ def main():
                     "execution_time": 0.0,
                     "stdout": "",
                     "stderr": execution_error,
+                    "runtime": runtime.name,
                 }
             try:
                 grade_kwargs = dict(
-                    task=task, execution_result=result, skill_dir=skill_dir, verbose=args.verbose
+                    task=task,
+                    execution_result=result,
+                    skill_dir=skill_dir,
+                    verbose=args.verbose,
+                    runtime=runtime,
                 )
                 if args.judge:
                     grade_kwargs["judge_model"] = args.judge
@@ -643,11 +657,11 @@ def main():
                     breakdown={},
                     notes=note,
                 )
-            task_grades.append(grade)
+
             task_results.append(result)
             results.append(result)
+            task_grades.append(grade)
 
-            # Log score immediately after grading
             score_pct = grade.score / grade.max_score * 100 if grade.max_score > 0 else 0
             status_emoji = (
                 "✅" if grade.score >= grade.max_score else "⚠️" if grade.score > 0 else "❌"
@@ -716,6 +730,8 @@ def main():
     aggregate = {
         "model": args.model,
         "benchmark_version": _get_git_version(skill_root),
+        "runtime": runtime.name,
+        "runtime_version": runtime.get_version(),
         "run_id": run_id,
         "timestamp": time.time(),
         "suite": args.suite,
@@ -739,9 +755,9 @@ def main():
     if args.no_upload:
         logger.info("Skipping upload (--no-upload)")
     else:
-        try:
-            from lib_upload import UploadError, upload_results
+        from lib_upload import UploadError, upload_results
 
+        try:
             result = upload_results(output_path, official_key=args.official_key)
             if result.submission_id:
                 logger.info("Submission ID: %s", result.submission_id)

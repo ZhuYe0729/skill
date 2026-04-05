@@ -259,7 +259,13 @@ def _build_payload(results_path: Path) -> Dict[str, Any]:
         "model": model,
         "provider": provider,
         "run_id": raw.get("run_id"),
-        "openclaw_version": _get_openclaw_version(),
+        "runtime": raw.get("runtime", "openclaw"),
+        "runtime_version": raw.get("runtime_version") or _get_openclaw_version(),
+        "openclaw_version": (
+            raw.get("runtime_version") or _get_openclaw_version()
+            if raw.get("runtime", "openclaw") == "openclaw"
+            else None
+        ),
         "total_score": round(total_score, 6),
         "max_score": round(max_score, 6),
         "total_execution_time_seconds": round(total_execution_time, 6),
@@ -268,6 +274,7 @@ def _build_payload(results_path: Path) -> Dict[str, Any]:
         "usage_summary": usage_summary,
         "metadata": {
             "suite": raw.get("suite"),
+            "runtime": raw.get("runtime", "openclaw"),
             "system": collect_system_metadata(),
         },
     }

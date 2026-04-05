@@ -350,19 +350,28 @@ def cleanup_agent_sessions(agent_id: str) -> None:
         logger.info("Removed %s old OpenClaw session transcripts for %s", removed, agent_id)
 
 
-def prepare_task_workspace(skill_dir: Path, run_id: str, task: Task, agent_id: str) -> Path:
+def prepare_task_workspace(
+    skill_dir: Path,
+    run_id: str,
+    task: Task,
+    agent_id: str,
+    *,
+    workspace: Path | None = None,
+    installed_skills_dirs: List[Path] | None = None,
+) -> Path:
     """
     Prepare workspace for a task by copying fixtures.
     Uses the agent's configured workspace to ensure files are in the right place.
     """
     import shutil
 
-    # Get agent's workspace from agent config
-    workspace = _get_agent_workspace(agent_id)
+    # Get agent's workspace from agent config unless the caller provides one.
     if workspace is None:
-        # Fallback to task-specific workspace if agent workspace not found
-        logger.warning("Could not find agent workspace, using fallback")
-        workspace = Path(f"/tmp/pinchbench/{run_id}/{task.task_id}")
+        workspace = _get_agent_workspace(agent_id)
+        if workspace is None:
+            # Fallback to task-specific workspace if agent workspace not found
+            logger.warning("Could not find agent workspace, using fallback")
+            workspace = Path(f"/tmp/pinchbench/{run_id}/{task.task_id}")
 
     _BOOTSTRAP_FILES = ["SOUL.md", "BOOTSTRAP.md", "USER.md", "IDENTITY.md", "HEARTBEAT.md", "TOOLS.md"]
 
@@ -401,10 +410,14 @@ def prepare_task_workspace(skill_dir: Path, run_id: str, task: Task, agent_id: s
             logger.error("Workspace file not found: %s", source)
             raise
 
-    # Copy skills from main workspace to benchmark workspace
-    # This enables benchmark agents to use installed skills like nano-pdf
-    main_skills_dir = Path.home() / ".openclaw" / "workspace" / "skills"
-    if main_skills_dir.exists():
+    # Copy installed skills into the task workspace when available.
+    candidate_skill_dirs = installed_skills_dirs
+    if candidate_skill_dirs is None:
+        candidate_skill_dirs = [Path.home() / ".openclaw" / "workspace" / "skills"]
+
+    for main_skills_dir in candidate_skill_dirs:
+        if not main_skills_dir.exists():
+            continue
         dest_skills_dir = workspace / "skills"
         dest_skills_dir.mkdir(parents=True, exist_ok=True)
         for skill_dir_src in main_skills_dir.iterdir():

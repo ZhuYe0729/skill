@@ -51,6 +51,7 @@ def grade_task(
     judge_model: str = DEFAULT_JUDGE_MODEL,
     judge_agent_prefix: str = DEFAULT_JUDGE_AGENT_PREFIX,
     judge_timeout_seconds: float = DEFAULT_JUDGE_TIMEOUT_SECONDS,
+    runtime: Any | None = None,
     verbose: bool = False,
 ) -> GradeResult:
     grading_type = task.grading_type
@@ -71,6 +72,7 @@ def grade_task(
             judge_agent_prefix=judge_agent_prefix,
             judge_timeout_seconds=judge_timeout_seconds,
             skill_dir=skill_dir,
+            runtime=runtime,
             verbose=verbose,
         )
         if verbose:
@@ -85,6 +87,7 @@ def grade_task(
             judge_agent_prefix=judge_agent_prefix,
             judge_timeout_seconds=judge_timeout_seconds,
             skill_dir=skill_dir,
+            runtime=runtime,
             verbose=verbose,
         )
         return _combine_grades(task, auto_result, llm_result)
@@ -145,6 +148,7 @@ def _grade_llm_judge(
     judge_agent_prefix: str,
     judge_timeout_seconds: float,
     skill_dir: Path,
+    runtime: Any | None = None,
     verbose: bool = False,
 ) -> GradeResult:
     transcript = execution_result.get("transcript", [])
@@ -174,14 +178,23 @@ def _grade_llm_judge(
     rubric = task.llm_judge_rubric or _format_grading_criteria(task)
     prompt = _build_judge_prompt(task, transcript_summary, rubric, workspace_content)
 
-    agent_id = _ensure_judge_agent(judge_agent_prefix, judge_model, skill_dir)
-    judge_workspace = Path(f"/tmp/pinchbench/judge/{task.task_id}")
-    judge_result = run_openclaw_prompt(
-        agent_id=agent_id,
-        prompt=prompt,
-        workspace=judge_workspace,
-        timeout_seconds=judge_timeout_seconds,
-    )
+    if runtime is not None:
+        judge_result = runtime.run_judge_prompt(
+            task_id=task.task_id,
+            prompt=prompt,
+            judge_model=judge_model,
+            judge_agent_prefix=judge_agent_prefix,
+            judge_timeout_seconds=judge_timeout_seconds,
+        )
+    else:
+        agent_id = _ensure_judge_agent(judge_agent_prefix, judge_model, skill_dir)
+        judge_workspace = Path(f"/tmp/pinchbench/judge/{task.task_id}")
+        judge_result = run_openclaw_prompt(
+            agent_id=agent_id,
+            prompt=prompt,
+            workspace=judge_workspace,
+            timeout_seconds=judge_timeout_seconds,
+        )
 
     if verbose:
         logger.info("   [VERBOSE] Judge execution status: %s", judge_result.get("status"))

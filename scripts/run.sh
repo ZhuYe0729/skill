@@ -5,4 +5,5 @@
 set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR/.."
-exec uv run scripts/benchmark.py "$@"
+# exec uv run scripts/benchmark.py "$@"
+exec python scripts/benchmark.py "$@" --no-upload
