@@ -101,7 +101,8 @@ export PINCHBENCH_OFFICIAL_KEY=your_official_key
 | `--no-upload`            | Skip uploading to leaderboard                                                 |
 | `--register`             | Request an API token for submissions                                          |
 | `--upload FILE`          | Upload a previous results JSON                                                |
-| `--official-key KEY`     | Mark submission as official (or use `PINCHBENCH_OFFICIAL_KEY` env var)         |
+| `--official-key KEY`     | Mark submission as official (or use `PINCHBENCH_OFFICIAL_KEY` env var)        |
+| `--runtime`              | choice: `['openclaw','nanobot']`, default: `'openclaw' `                            |
 
 ## Contributing Tasks
 

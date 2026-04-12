@@ -67,3 +67,5 @@ results/
 
 # Vultr deployment
 deploy/
+
+results_bk/
