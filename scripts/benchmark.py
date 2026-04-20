@@ -16,6 +16,7 @@ import argparse
 import json
 import logging
 import os
+import shutil
 import statistics
 import subprocess
 import sys
@@ -232,6 +233,18 @@ def _parse_args() -> argparse.Namespace:
         help="Path to a nanobot repository or installation root when using --runtime nanobot",
     )
     parser.add_argument(
+        "--tasks-dir",
+        type=str,
+        default=None,
+        help="Directory of task_*.md files (default: <repo>/tasks). Point at QwenClawBench data/.../tasks for external suites.",
+    )
+    parser.add_argument(
+        "--assets-root",
+        type=str,
+        default=None,
+        help="Fixture root with per-task subfolders (e.g. QwenClawBench .../assets). If omitted with --tasks-dir, uses <parent>/assets when present.",
+    )
+    parser.add_argument(
         "--verbose",
         "-v",
         action="store_true",
@@ -314,6 +327,103 @@ def _colorize_gradient(ascii_art: str) -> str:
         green_blue = int(255 * (1 - t))
         colored_lines.append(f"\x1b[38;2;255;{green_blue};{green_blue}m{line}\x1b[0m")
     return "\n".join(colored_lines)
+
+
+_TRAJECTORY_SUFFIXES = (".jsonl", ".ndjson")
+
+
+def _iter_session_files(workspace: Path) -> List[Path]:
+    sessions_dir = workspace / "sessions"
+    if not sessions_dir.exists():
+        return []
+    return [
+        path
+        for path in sorted(sessions_dir.iterdir())
+        if path.is_file() and path.suffix in _TRAJECTORY_SUFFIXES
+    ]
+
+
+def _write_transcript_jsonl(path: Path, transcript: List[Dict[str, Any]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as handle:
+        for event in transcript:
+            handle.write(json.dumps(event, ensure_ascii=False) + "\n")
+
+
+def _export_trajectories(
+    *,
+    results: List[Dict[str, Any]],
+    output_dir: Path,
+    run_id: str,
+) -> Dict[str, Any]:
+    trajectories_root = output_dir / "trajectories" / run_id
+    trajectories_root.mkdir(parents=True, exist_ok=True)
+
+    run_index_by_task: Dict[str, int] = {}
+    manifest_entries: List[Dict[str, Any]] = []
+    copied_files = 0
+
+    for result in results:
+        task_id = str(result.get("task_id", "unknown_task"))
+        run_index = run_index_by_task.get(task_id, 0) + 1
+        run_index_by_task[task_id] = run_index
+
+        run_dir = trajectories_root / task_id / f"run_{run_index:02d}"
+        run_dir.mkdir(parents=True, exist_ok=True)
+
+        workspace_value = result.get("workspace", "")
+        workspace = (
+            Path(workspace_value)
+            if isinstance(workspace_value, str) and workspace_value
+            else None
+        )
+        session_files = _iter_session_files(workspace) if workspace is not None else []
+
+        copied_for_run: List[str] = []
+        source_kind = "none"
+
+        if session_files:
+            source_kind = "workspace_sessions"
+            for src in session_files:
+                dest = run_dir / src.name
+                shutil.copy2(src, dest)
+                copied_files += 1
+                copied_for_run.append(str(dest))
+        else:
+            transcript = result.get("transcript") or []
+            if transcript:
+                source_kind = "canonical_transcript"
+                dest = run_dir / "canonical_transcript.jsonl"
+                _write_transcript_jsonl(dest, transcript)
+                copied_files += 1
+                copied_for_run.append(str(dest))
+
+        manifest_entries.append(
+            {
+                "task_id": task_id,
+                "run_index": run_index,
+                "status": result.get("status"),
+                "workspace": workspace_value,
+                "source": source_kind,
+                "files": copied_for_run,
+            }
+        )
+
+    manifest_path = trajectories_root / "manifest.json"
+    manifest = {
+        "run_id": run_id,
+        "generated_at": time.time(),
+        "entry_count": len(manifest_entries),
+        "file_count": copied_files,
+        "entries": manifest_entries,
+    }
+    manifest_path.write_text(json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8")
+
+    return {
+        "root": str(trajectories_root),
+        "manifest": str(manifest_path),
+        "file_count": copied_files,
+    }
 
 
 def _compute_efficiency_summary(
@@ -502,25 +612,8 @@ def _log_category_summary(
 
 def main():
     """Main entry point for the benchmark script."""
-    # Determine tasks directory
     script_dir = Path(__file__).parent
     skill_root = script_dir.parent  # Parent of scripts/ is the skill root
-    tasks_dir = skill_root / "tasks"
-
-    logger.info("🦞🦀🦐 PinchBench - OpenClaw Benchmarking")
-    ascii_crab = _load_ascii_art(skill_root, "crab.txt")
-    if ascii_crab:
-        print("\n" + _colorize_gradient(ascii_crab) + "\n")
-    else:
-        print("\n" + "🦀 " * 30)
-        print("🦀 " * 30 + "\n")
-    logger.info("🦞🦀🦐 Starting PinchBench 🦐🦀🦞")
-    time.sleep(5)
-
-    if not tasks_dir.exists():
-        logger.error(f"❌ Tasks directory not found: {tasks_dir}")
-        sys.exit(1)
-
     args = _parse_args()
     if not args.model and not args.register and not args.upload:
         logger.error("Missing required argument: --model (unless using --register or --upload)")
@@ -559,6 +652,33 @@ def main():
             logger.error("Upload failed: %s", exc)
             sys.exit(1)
 
+    tasks_dir = (
+        Path(args.tasks_dir).expanduser().resolve()
+        if args.tasks_dir
+        else skill_root / "tasks"
+    )
+    if not tasks_dir.exists():
+        logger.error("❌ Tasks directory not found: %s", tasks_dir)
+        sys.exit(1)
+
+    asset_search_dirs = None
+    if args.assets_root:
+        asset_search_dirs = [Path(args.assets_root).expanduser().resolve()]
+    elif args.tasks_dir:
+        inferred_assets = tasks_dir.parent / "assets"
+        if inferred_assets.is_dir():
+            asset_search_dirs = [inferred_assets]
+
+    logger.info("🦞🦀🦐 PinchBench - OpenClaw Benchmarking")
+    ascii_crab = _load_ascii_art(skill_root, "crab.txt")
+    if ascii_crab:
+        print("\n" + _colorize_gradient(ascii_crab) + "\n")
+    else:
+        print("\n" + "🦀 " * 30)
+        print("🦀 " * 30 + "\n")
+    logger.info("🦞🦀🦐 Starting PinchBench 🦐🦀🦞")
+    time.sleep(5)
+
     logger.info("🔧 Initializing BenchmarkRunner...")
     runner = BenchmarkRunner(tasks_dir)
 
@@ -578,6 +698,7 @@ def main():
         verbose=args.verbose,
         nanobot_config=Path(args.nanobot_config).expanduser().resolve() if args.nanobot_config else None,
         nanobot_path=Path(args.nanobot_path).expanduser().resolve() if args.nanobot_path else None,
+        asset_search_dirs=asset_search_dirs,
     )
     runtime = create_runtime(runtime_options)
 
@@ -704,11 +825,23 @@ def main():
         if task.task_id == sanity_task_id and grades_by_task_id[task.task_id]["mean"] == 0.0:
             if all_runs_missing_transcript:
                 logger.warning(
-                    "⚠️ Sanity check scored 0%% but transcripts were missing for all runs; skipping fail-fast as likely infrastructure/logging issue."
+                    "⚠️ Sanity check scored 0%% but trannscripts were missing for all runs; skipping fail-fast as likely infrastructure/logging issue."
                 )
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+
+    trajectory_export = _export_trajectories(
+        results=results,
+        output_dir=output_dir,
+        run_id=run_id,
+    )
+    logger.info(
+        "Saved trajectories to %s (%s files)",
+        trajectory_export["root"],
+        trajectory_export["file_count"],
+    )
+    logger.info("Trajectory manifest: %s", trajectory_export["manifest"])
 
     task_entries = [
         {

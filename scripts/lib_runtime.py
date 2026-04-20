@@ -11,7 +11,7 @@ import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, List, Optional
 
 from lib_agent import (
     ModelValidationError,
@@ -40,6 +40,8 @@ class RuntimeOptions:
     verbose: bool = False
     nanobot_config: Path | None = None
     nanobot_path: Path | None = None
+    # When set, fixtures are resolved from these roots (e.g. QwenClawBench data/.../assets).
+    asset_search_dirs: Optional[List[Path]] = None
 
 
 class BenchmarkRuntime(ABC):
@@ -107,6 +109,7 @@ class OpenClawRuntime(BenchmarkRuntime):
             timeout_multiplier=self.options.timeout_multiplier,
             skill_dir=self.options.skill_dir,
             verbose=self.options.verbose,
+            asset_search_dirs=self.options.asset_search_dirs,
         )
         result["transcript"] = canonicalize_openclaw_transcript(result.get("transcript", []))
         result["runtime"] = self.name
@@ -311,6 +314,7 @@ class NanobotRuntime(BenchmarkRuntime):
             self.agent_id,
             workspace=Path(f"/tmp/pinchbench/{self.options.run_id}/{task.task_id}"),
             installed_skills_dirs=[Path.home() / ".nanobot" / "workspace" / "skills"],
+            asset_search_dirs=self.options.asset_search_dirs,
         )
 
         start_time = time.time()

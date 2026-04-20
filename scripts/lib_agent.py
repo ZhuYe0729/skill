@@ -350,6 +350,28 @@ def cleanup_agent_sessions(agent_id: str) -> None:
         logger.info("Removed %s old OpenClaw session transcripts for %s", removed, agent_id)
 
 
+def _resolve_workspace_asset(
+    task: Task,
+    source_rel: str,
+    search_dirs: List[Path],
+) -> Path:
+    """Resolve a workspace fixture path (supports per-task asset dirs like QwenClawBench)."""
+    for asset_root in search_dirs:
+        if not asset_root.exists():
+            continue
+        for candidate in (asset_root / task.task_id / source_rel, asset_root / source_rel):
+            if candidate.is_file() or candidate.is_dir():
+                return candidate
+    searched = [
+        str(p)
+        for d in search_dirs
+        for p in (d / task.task_id / source_rel, d / source_rel)
+    ]
+    raise FileNotFoundError(
+        f"Workspace file '{source_rel}' not found under any of: {', '.join(searched)}"
+    )
+
+
 def prepare_task_workspace(
     skill_dir: Path,
     run_id: str,
@@ -358,6 +380,7 @@ def prepare_task_workspace(
     *,
     workspace: Path | None = None,
     installed_skills_dirs: List[Path] | None = None,
+    asset_search_dirs: List[Path] | None = None,
 ) -> Path:
     """
     Prepare workspace for a task by copying fixtures.
@@ -394,6 +417,11 @@ def prepare_task_workspace(
     for fname, content in saved_bootstrap.items():
         (workspace / fname).write_bytes(content)
 
+    if asset_search_dirs is not None:
+        search_dirs = list(asset_search_dirs)
+    else:
+        search_dirs = [skill_dir / "assets", skill_dir / "generated_assets"]
+
     for file_spec in task.workspace_files:
         if "content" in file_spec:
             dest = workspace / file_spec["path"]
@@ -401,14 +429,21 @@ def prepare_task_workspace(
             dest.write_text(file_spec["content"])
             continue
 
-        source = skill_dir / "assets" / file_spec["source"]
+        source_rel = file_spec["source"]
         dest = workspace / file_spec["dest"]
         dest.parent.mkdir(parents=True, exist_ok=True)
         try:
+            source = _resolve_workspace_asset(task, source_rel, search_dirs)
+        except FileNotFoundError as exc:
+            logger.error("Workspace file not found: %s", source_rel)
+            raise exc
+
+        if source.is_dir():
+            if dest.exists():
+                shutil.rmtree(dest, onerror=_remove_readonly)
+            shutil.copytree(source, dest)
+        else:
             dest.write_bytes(source.read_bytes())
-        except FileNotFoundError:
-            logger.error("Workspace file not found: %s", source)
-            raise
 
     # Copy installed skills into the task workspace when available.
     candidate_skill_dirs = installed_skills_dirs
@@ -688,6 +723,7 @@ def execute_openclaw_task(
     timeout_multiplier: float,
     skill_dir: Path,
     verbose: bool = False,
+    asset_search_dirs: List[Path] | None = None,
 ) -> Dict[str, Any]:
     logger.info("🤖 Agent [%s] starting task: %s", agent_id, task.task_id)
     logger.info("   Task: %s", task.name)
@@ -702,7 +738,13 @@ def execute_openclaw_task(
     cleanup_agent_sessions(agent_id)
 
     start_time = time.time()
-    workspace = prepare_task_workspace(skill_dir, run_id, task, agent_id)
+    workspace = prepare_task_workspace(
+        skill_dir,
+        run_id,
+        task,
+        agent_id,
+        asset_search_dirs=asset_search_dirs,
+    )
     session_id = f"{task.task_id}_{int(time.time() * 1000)}"
     timeout_seconds = task.timeout_seconds * timeout_multiplier
     stdout = ""
